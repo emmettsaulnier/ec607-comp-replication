@@ -1,7 +1,7 @@
 
 # Replication of Conesa et al "Taxing Capital"
+using Parameters, QuantEcon
 
-using Parameters
 #### Step 0: Create a struct for the model parameters  
 @with_kw mutable struct TaxMod 
     # Demographics 
@@ -18,6 +18,9 @@ using Parameters
     var_α::Float64 = 0.14 # Variance types 
     ρ::Float64 = 0.98 # persistence 
     var_η::Float64 = 0.0289 # variance shock
+    Nη::Int64 = 7 # Number of states
+    η::Vector{Float64} = zeros(0) 
+    Π::Matrix{Float64} = zeros(0,0) # Transition matrix
 
     # Technology
     α::Float64 = 0.36 # capital share
@@ -36,7 +39,7 @@ using Parameters
     ns::Int64 = 7   
     na::Int64 = 101 # asset grid
     nl::Int64 = 66  # leisure grid
-    nty::Int64 = 2
+    nty::Int64 = 2 # tax grid
     maxit::Int64 = 10000
 
     # Other
@@ -152,24 +155,37 @@ end
 
 
 ### SEE PARAMS for basefun subroutine
-
 tm = TaxMod()
 
-##### Step 1: Create a grid of individual asset holdings
-function grid(TM::TaxMod, scale = 75, curve = 2.5)
-    @unpack na,nl,blimit,maxl = TM
+##### Step 1: Create a grid of individual asset holdings. define survival rates, age distribution, and labor efficiency grids 
+"""
+    setup_grid!()
+
+This creates the grids for assets and labor. Also loads demographic 
+characteristics: age efficiency units from Hansen 1993 and population
+from Bell and Miller 2002.
+"""
+function setup_grid!(TM::TaxMod, scale = 75, curve = 2.5)
+    @unpack na,nl,blimit,maxl,J,nty,nn,Nη,ρ,var_η = TM
 
     # Asset grid: with curvature
     grida = (scale - blimit).*LinRange(0,1,na).^curve .+ blimit
     # Labor grid: evenly spaced 
     gridl = LinRange(0,maxl,nl)
 
-    # Returning the grids
-    return (grida = grida, gridl = gridl)
+    # Loading demographic data from other script
+    include("demographics.jl")
+    ephansen,pop,surv,Nu,mu,ep,measty,topop = age_eff_pop(J,nty,nn)
+
+    # Labor Productivity Markov Chain 
+    mc = rouwenhorst(Nη,ρ,var_η)
+    HH.Π = Π = mc.p
+    HH.η = exp.(mc.state_values)
+
 
 end
 
 
-##### Step 2 define survival rates, age distribution, and labor efficiency grids 
+##### Step 2 
 
 
