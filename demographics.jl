@@ -139,12 +139,13 @@ function age_eff_pop(J, nty, nn)
     pop[80]=3550
     pop[81]=2454
     
-    # What are ep and measty?
+    # Labor efficiency 
     ep = zeros(nty,J)
     for i in 1:nty
         ep[i,1:J] = ephansen[1:J]
     end
     
+    # WHat is measty? Probability of high and low ability
     measty = zeros(nty)
     measty[1:nty] .= 1.0/nty
 

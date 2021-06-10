@@ -29,24 +29,24 @@ using Parameters, QuantEcon
 
     # Government Policy  
     τc::Float64 = 0.05 # consumption tax 
-    κ0::Float64 = 0.258 # marginal tax
-    κ1::Float64 = 0.768 # tax progressivity
-    τp::Float64 = 0.124 # payroll tax 
+    κ0::Float64 = 0.258 #X marginal tax
+    κ1::Float64 = 0.768 #X tax progressivity
+    τp::Float64 = 0.124 #X payroll tax 
     b::Float64 = 0.5 # Social security replacement rate
     maxSSrat::Float64 = 87000.0/37748.0
 
     # Grid sizes 
-    ns::Int64 = 7   
+    ns::Int64 = 7 #X Also number of states?
     na::Int64 = 101 # asset grid
     nl::Int64 = 66  # leisure grid
-    nty::Int64 = 2 # tax grid
+    nty::Int64 = 2 
     maxit::Int64 = 10000
 
     # Other
-    blimit::Float64 = 0.0 # borrowing constraint
+    a̲::Float64 = 0.0 # borrowing constraint
     umin::Float64 = -1.0E+2 # minimum utility 
     penscale::Float64 = 10000000 # penalty on utility for bad c or l
-    maxl::Float64 = 0.99 # maximum value for labor supply
+    l̅::Float64 = 0.99 # maximum value for labor supply
 
 end;
 
@@ -165,13 +165,41 @@ This creates the grids for assets and labor. Also loads demographic
 characteristics: age efficiency units from Hansen 1993 and population
 from Bell and Miller 2002.
 """
-function setup_grid!(TM::TaxMod, scale = 75, curve = 2.5)
-    @unpack na,nl,blimit,maxl,J,nty,nn,Nη,ρ,var_η = TM
+function setup_grid!(TM::TaxMod, a̅ = 75, curve = 2.5)
+    @unpack na,nl,a̲,l̅,J,nty,nn,Nη,ρ,var_η,κ0,κ1 = TM
 
     # Asset grid: with curvature
-    grida = (scale - blimit).*LinRange(0,1,na).^curve .+ blimit
+    grida = (a̅ - a̲).*LinRange(0,1,na).^curve .+ a̲
     # Labor grid: evenly spaced 
-    gridl = LinRange(0,maxl,nl)
+    gridl = LinRange(0,l̅,nl)
+    # Tax grid
+	
+    #-----------------
+    # Long way
+    na0		= 1
+	na1		= 1
+	ntauk	= 1
+
+	mina0	= 0.258
+	maxa0	= mina0
+
+	mina1	= 0.768
+	maxa1	= mina1
+
+	mintauk	= 0.0
+	maxtauk	= 0.0
+
+    a0 = zeros(na0)
+    if na0 == 1
+        a0[1] = mina0
+    else 
+        a0 = LinRange(mina0,maxa0,na0)
+    end
+    #----------------
+    # Short way
+    a0 = κ0
+    a1 = κ1
+
 
     # Loading demographic data from other script
     include("demographics.jl")
@@ -182,10 +210,14 @@ function setup_grid!(TM::TaxMod, scale = 75, curve = 2.5)
     HH.Π = Π = mc.p
     HH.η = exp.(mc.state_values)
 
+    # Fixed effects 
+    ϵ[1,1:J] = exp(-sqrt(var_α)) .* ephansen[1:J]
+    ϵ[2,1:J] = exp(sqrt(var_α)) .* ephansen[1:J]
+
 
 end
 
 
-##### Step 2 
+##### Step 2: Solving household problem
 
 
