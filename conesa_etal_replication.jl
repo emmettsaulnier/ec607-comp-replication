@@ -1,6 +1,6 @@
 
 # Replication of Conesa et al "Taxing Capital"
-using Parameters, QuantEcon
+using Parameters, QuantEcon, BasisMatrices,LinearAlgebra,Optim,DataFrames,Gadfly,SparseArrays,Arpack,Roots
 
 #### Step 0: Create a struct for the model parameters  
 @with_kw mutable struct TaxMod 
@@ -8,6 +8,7 @@ using Parameters, QuantEcon
     jr::Int64 = 46 # Retirement age
     J::Int64 = 81 # Maximum age
     nn::Float64 = 0.011 # Population growth
+    ψ::Vector{Float64} = zeros(0) # survival probabilities
 
     # Preferences 
     β::Float64 = 1.00093 # Discount Factor 
@@ -19,19 +20,24 @@ using Parameters, QuantEcon
     ρ::Float64 = 0.98 # persistence 
     var_η::Float64 = 0.0289 # variance shock
     Nη::Int64 = 7 # Number of states
-    η::Vector{Float64} = zeros(0) 
+    η::Vector{Float64} = zeros(0) # productivity shock states
     Π::Matrix{Float64} = zeros(0,0) # Transition matrix
+    ϵ::Matrix{Float64} = zeros(0,0) # ability x age efficiency matrix
 
     # Technology
     α::Float64 = 0.36 # capital share
     δ::Float64 = 0.0833 # depreciation
-    TFP::Float64 = 1.0 # scale parameterZ
+    TFP::Float64 = 1.0 # scale parameter Z
+    w::Float64 = 1.0 # wages  
+    r::Float64 = 0.05 # interest rate 
 
     # Government Policy  
     τc::Float64 = 0.05 # consumption tax 
-    κ0::Float64 = 0.258 #X marginal tax
-    κ1::Float64 = 0.768 #X tax progressivity
-    τp::Float64 = 0.124 #X payroll tax 
+    τk::Float64 = 0.36 # capital tax
+    κ0::Float64 = 0.258 # marginal tax
+    κ1::Float64 = 0.768 # tax progressivity
+    κ2::Float64 = 0.0 # deduction
+    τp::Float64 = 0.124 # payroll tax 
     b::Float64 = 0.5 # Social security replacement rate
     maxSSrat::Float64 = 87000.0/37748.0
 
@@ -46,7 +52,16 @@ using Parameters, QuantEcon
     a̲::Float64 = 0.0 # borrowing constraint
     umin::Float64 = -1.0E+2 # minimum utility 
     penscale::Float64 = 10000000 # penalty on utility for bad c or l
-    l̅::Float64 = 0.99 # maximum value for labor supply
+    l̅::Float64 = 0.99 # maximum value for labor supply 
+    
+    # Spending stuff
+    # G, Tr, SS
+
+    #Solution
+    k::Int = 2 #type of interpolation
+    Vf::Array{Interpoland} = Interpoland[]
+    cf::Array{Interpoland} = Interpoland[]
+    
 
 end;
 
@@ -165,59 +180,138 @@ This creates the grids for assets and labor. Also loads demographic
 characteristics: age efficiency units from Hansen 1993 and population
 from Bell and Miller 2002.
 """
+a′grid = zeros(tm.na)
+lgrid = zeros(tm.nl)
+
 function setup_grid!(TM::TaxMod, a̅ = 75, curve = 2.5)
-    @unpack na,nl,a̲,l̅,J,nty,nn,Nη,ρ,var_η,κ0,κ1 = TM
+    @unpack na,nl,a̲,l̅,J,nty,nn,ns,ρ,var_η,var_α,Vf,cf,k = TM
 
     # Asset grid: with curvature
-    grida = (a̅ - a̲).*LinRange(0,1,na).^curve .+ a̲
+    a′grid = (a̅ - a̲).*LinRange(0,1,na).^curve .+ a̲
     # Labor grid: evenly spaced 
-    gridl = LinRange(0,l̅,nl)
-    # Tax grid
-	
-    #-----------------
-    # Long way
-    na0		= 1
-	na1		= 1
-	ntauk	= 1
-
-	mina0	= 0.258
-	maxa0	= mina0
-
-	mina1	= 0.768
-	maxa1	= mina1
-
-	mintauk	= 0.0
-	maxtauk	= 0.0
-
-    a0 = zeros(na0)
-    if na0 == 1
-        a0[1] = mina0
-    else 
-        a0 = LinRange(mina0,maxa0,na0)
-    end
-    #----------------
-    # Short way
-    a0 = κ0
-    a1 = κ1
-
+    lgrid = LinRange(0,l̅,nl)
 
     # Loading demographic data from other script
     include("demographics.jl")
-    ephansen,pop,surv,Nu,mu,ep,measty,topop = age_eff_pop(J,nty,nn)
+    #ephansen,pop,surv,Nu,mu,ep,measty,topop = age_eff_pop(J,nty,nn)
+    TM.ψ = age_eff_pop(J,nty,nn).surv
+    ephansen = age_eff_pop(J,nty,nn).ephansen
 
     # Labor Productivity Markov Chain 
-    mc = rouwenhorst(Nη,ρ,var_η)
-    HH.Π = Π = mc.p
-    HH.η = exp.(mc.state_values)
+    mc = rouwenhorst(ns,ρ,var_η)
+    TM.Π = mc.p
+    TM.η = exp.(mc.state_values)
 
     # Fixed effects 
-    ϵ[1,1:J] = exp(-sqrt(var_α)) .* ephansen[1:J]
-    ϵ[2,1:J] = exp(sqrt(var_α)) .* ephansen[1:J]
+    TM.ϵ = zeros(nty,J)
+    TM.ϵ[1,1:J] = exp(-sqrt(var_α)) .* ephansen[1:J]
+    TM.ϵ[2,1:J] = exp(sqrt(var_α)) .* ephansen[1:J]
 
+    #First guess of interpolation functions
+    abasis = Basis(SplineParams(a′grid,0,k))
+    a = nodes(abasis)[1]
 
+    Vf = TM.Vf = Array{Interpoland}(undef,ns,nty,J)
+    cf = TM.cf = Array{Interpoland}(undef,ns,nty,J)
+
+    for s in 1:ns
+        for 
+            c = @. r̄*a + w̄*HH.ϵ[s]
+            V = U(HH,c)./(1-β)
+
+            Vf[s]= Interpoland(abasis,V)
+            cf[s]= Interpoland(abasis,c)
+    
+        end
+    end 
 end
 
-
+setup_grid!(tm)
 ##### Step 2: Solving household problem
 
+# V is function of a, η, i, j
 
+
+
+if j == J
+    # Consume everything in last period
+    l = 0 
+    c = everything 
+    V = U(c,l)
+elseif j >= jr
+    # Labor = 0 when retired
+    l = 0
+    c = (ss + (1 + r(1-τk)(a + Tr))) - agrid
+    V = U(c,l) + β*ψ*EV[agrid] 
+else 
+    # Static FOC for labor/consumption 
+    l(c) = 1 - ((1-γ)*(1+τc)/(γỹ)) * c
+    c = 
+
+# Start with grid of next period's assets
+# Guess consumption tommorrow
+# Use to get consumption today w/ EE
+# Use that to get labor using FOC 
+# Use c, labor, a′ to get assets today 
+#
+
+##### Function arguments 
+TaxMod, a′grid, c0 
+
+"""
+    iterate_endogenousgrid(HH,a′grid,cf′)
+
+Iterates on Euler equation using endogenous grid method
+
+c needs to be na x ns
+
+"""
+function iterate_endogenousgrid(tm::TaxMod,a′grid,cf′)
+    @unpack ns,nty,J,jr,ψ,β,τk,τc,σ,κ0,κ1,κ2,w,ϵ,η,Π = tm
+
+    # Finding initial guess for c′ at a′grid values for each ability type and period
+    c′ = zeros(length(a′grid),ns,nty,J)
+    for s in 1:ns
+        for ty in 1:nty
+            for j in 1:J
+                c′[:,s,ty,j]= cf′[s,ty,j](a′grid)
+            end
+        end
+    end
+
+    c = zeros(length(a′grid),ns,nty,J)
+    # Finding c from c′ using Euler Equation
+    for i in 1:length(a′grid)
+        for s in 1:ns
+            for ty in 1:nty
+                for j in 1:(J-1)
+                    if j == J
+                        c[i,s,ty,j] = 0
+                    elseif j >= jr
+                        c[i,s,ty,j] = 0
+                    elseif j < jr
+                        c[i,s,ty,j] = ((β * ψ[j] * ((1+r(1-τk))/(1+τc)) * c′[i,s,ty,j]^(-σ) *
+                            ((1 - marginal_tax_gs(κ0,κ1,κ2,w*ϵ[ty,j]) - τss)*ϵ[ty,j]*η[s])/
+                            ((1 - marginal_tax_gs(κ0,κ1,κ2,w*ϵ[ty,j+1]) - τss)*ϵ[ty,j+1]) ./ η) * Π[s,:])^(1/(σ))
+                    end
+                end
+            end
+        end
+    
+                    (1+r̄)*(c′).^(-γ)*Π' #RHS of Euler Equation
+    c = EERHS.^(-1/γ)
+
+    #compute implies assets
+    a = ((c .+ a′grid) .- w̄ .*ϵ')./(1+r̄)
+
+    cf = Vector{Interpoland}(undef,Nϵ)
+    for s in 1:Nϵ
+        if a[1,s]> a̲
+            c̲ = r̄*a̲ + w̄*ϵ[s]
+            cf[s]= Interpoland(Basis(SplineParams([a̲; a[:,s]],0,1)),[c̲;c[:,s]])
+        else
+            cf[s]= Interpoland(Basis(SplineParams(a[:,s],0,1)),c[:,s])
+        end
+    end
+    return cf
+end;

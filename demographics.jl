@@ -154,19 +154,19 @@ function age_eff_pop(J, nty, nn)
     for i in  1:(J-1)
     surv[i] = pop[i+1]/pop[i]
     end
-    surv(J) = 0.0
+    surv[J] = 0.0
 
     # Number of Agents in population
     Nu = zeros(J)
     Nu[1] = 1.0
     for i in 2:J
-        Nu[i] = surv[i-1]*Nu[i-1]/[1.0+nn]	  
+        Nu[i] = surv[i-1]*Nu[i-1]/(1.0+nn)	  
     end 
 
     # Fraction of agents in population
     mu = zeros(J)
     for i in 1:J
-        mu[i] = Nu[i]/sum[Nu]
+        mu[i] = Nu[i]/sum(Nu)
     end 
 
     # Total population
