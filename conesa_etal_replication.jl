@@ -44,7 +44,7 @@ using Parameters, QuantEcon, BasisMatrices,LinearAlgebra,Optim,DataFrames,Gadfly
 
     # Grid sizes 
     ns::Int64 = 7 #X Also number of states?
-    na::Int64 = 101 # asset grid
+    na::Int64 = 10 # asset grid
     nl::Int64 = 66  # leisure grid
     nty::Int64 = 2 
     maxit::Int64 = 10000

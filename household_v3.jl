@@ -60,7 +60,7 @@ function solvebellman!(TM::TaxMod)
 
     diff = 1.
     Vf′ = copy(TM.Vf)
-    while diff > 1e-8 
+    for i in 1:10 #while diff > 1e-8 
         TM.Vf = iterateBellman(TM,Vf′)
         diff = maximum([norm(Vf′[s,ty,j].coefs - TM.Vf[s,ty,j].coefs,Inf) for s in 1:ns, ty in 1:nty, j in 1:J])
         println(diff)
