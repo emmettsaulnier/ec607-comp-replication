@@ -1,4 +1,5 @@
 
+
 # Replication of Conesa et al "Taxing Capital"
 using Parameters, QuantEcon, BasisMatrices,LinearAlgebra,Optim,DataFrames,Gadfly,SparseArrays,Arpack,Roots
 
@@ -55,9 +56,12 @@ using Parameters, QuantEcon, BasisMatrices,LinearAlgebra,Optim,DataFrames,Gadfly
     l̅::Float64 = 0.99 # maximum value for labor supply 
     
     # Spending stuff
-    # G, Tr, SS
+    G::Float64 = 6.670
+    Tr::Float64 = 2.0
+    SS::Float64 = 2.0
 
     #Solution
+    agrid::Vector{Float64} = zeros(0)
     k::Int = 2 #type of interpolation
     Vf::Array{Interpoland} = Interpoland[]
     cf::Array{Interpoland} = Interpoland[]
@@ -173,6 +177,32 @@ end
 tm = TaxMod()
 
 ##### Step 1: Create a grid of individual asset holdings. define survival rates, age distribution, and labor efficiency grids 
+
+"""
+    l(c,j)
+
+Static FOC relating consumption and leisure 
+"""
+function l(TM::TaxMod, c)
+    @unpack jr,γ,τc,ϵ,w,η = TM
+
+    for s in 1:ns
+        for ty in 1:nty
+            for j in 1:J
+                if j >= jr
+                    l[s,ty,j] = 0
+                else
+                    l[s,ty,j] = 1 - ((1-γ)/γ)*(1 + τc)/(w*)  
+
+                cf[s]= Interpoland(abasis,c)
+            end
+        end
+    end
+      
+
+
+end
+
 """
     setup_grid!()
 
@@ -184,10 +214,10 @@ a′grid = zeros(tm.na)
 lgrid = zeros(tm.nl)
 
 function setup_grid!(TM::TaxMod, a̅ = 75, curve = 2.5)
-    @unpack na,nl,a̲,l̅,J,nty,nn,ns,ρ,var_η,var_α,Vf,cf,k = TM
+    @unpack na,nl,a̲,l̅,J,nty,nn,ns,ρ,var_η,var_α,Vf,cf,k = tm
 
     # Asset grid: with curvature
-    a′grid = (a̅ - a̲).*LinRange(0,1,na).^curve .+ a̲
+    tm.agrid = (a̅ - a̲).*LinRange(0,1,na).^curve .+ a̲
     # Labor grid: evenly spaced 
     lgrid = LinRange(0,l̅,nl)
 
@@ -213,40 +243,37 @@ function setup_grid!(TM::TaxMod, a̅ = 75, curve = 2.5)
 
     Vf = TM.Vf = Array{Interpoland}(undef,ns,nty,J)
     cf = TM.cf = Array{Interpoland}(undef,ns,nty,J)
+    lf = Array{Interpoland}(undef,ns,nty,J)
 
     for s in 1:ns
         for 
             c = @. r̄*a + w̄*HH.ϵ[s]
             V = U(HH,c)./(1-β)
+            l = 
 
             Vf[s]= Interpoland(abasis,V)
             cf[s]= Interpoland(abasis,c)
     
         end
-    end 
+    end
+    
+    for s in 1:ns
+        for ty in 1:nty
+            for j in 1:J
+                
+                c[:,s,ty,j]= @. r*a + w*TM.ϵ[s]
+                V = U.(c[:,s,ty,j],0.5)./(1-β)
+    
+                Vf[s]= Interpoland(abasis,V)
+                cf[s]= Interpoland(abasis,c)
+            end
+        end
+    end
+    
 end
 
 setup_grid!(tm)
 ##### Step 2: Solving household problem
-
-# V is function of a, η, i, j
-
-
-
-if j == J
-    # Consume everything in last period
-    l = 0 
-    c = everything 
-    V = U(c,l)
-elseif j >= jr
-    # Labor = 0 when retired
-    l = 0
-    c = (ss + (1 + r(1-τk)(a + Tr))) - agrid
-    V = U(c,l) + β*ψ*EV[agrid] 
-else 
-    # Static FOC for labor/consumption 
-    l(c) = 1 - ((1-γ)*(1+τc)/(γỹ)) * c
-    c = 
 
 # Start with grid of next period's assets
 # Guess consumption tommorrow
@@ -255,8 +282,6 @@ else
 # Use c, labor, a′ to get assets today 
 #
 
-##### Function arguments 
-TaxMod, a′grid, c0 
 
 """
     iterate_endogenousgrid(HH,a′grid,cf′)
