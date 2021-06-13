@@ -45,7 +45,7 @@ using Parameters, QuantEcon, BasisMatrices,LinearAlgebra,Optim,DataFrames,Gadfly
     # Grid sizes 
     ns::Int64 = 7 #X Also number of states?
     na::Int64 = 10 # asset grid
-    nl::Int64 = 66  # leisure grid
+    nl::Int64 = 4  # leisure grid
     nty::Int64 = 2 
     maxit::Int64 = 10000
 
@@ -62,6 +62,7 @@ using Parameters, QuantEcon, BasisMatrices,LinearAlgebra,Optim,DataFrames,Gadfly
 
     #Solution
     agrid::Vector{Float64} = zeros(0)
+    lgrid::Vector{Float64} = zeros(0)
     k::Int = 2 #type of interpolation
     Vf::Array{Interpoland} = Interpoland[] # value function given a
     Vlf::Array{Interpoland} = Interpoland[] # Value function given a,l
