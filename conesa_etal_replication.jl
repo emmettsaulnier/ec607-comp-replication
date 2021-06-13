@@ -194,7 +194,7 @@ function l(TM::TaxMod, c)
                 if j >= jr
                     l[s,ty,j] = 0
                 else
-                    l[s,ty,j] = 1 - ((1-γ)/γ)*(1 + τc)/(w*)  
+  #                  l[s,ty,j] = 1 - ((1-γ)/γ)*(1 + τc)/(w*)  
 
                 cf[s]= Interpoland(abasis,c)
             end
@@ -250,7 +250,7 @@ function setup_grid!(TM::TaxMod, a̅ = 75, curve = 2.5)
     for s in 1:ns
         for 
             c = @. r̄*a + w̄*HH.ϵ[s]
-            V = U(HH,c)./(1-β)
+            V = U(HH,c,l)./(1-β)
             l = 
 
             Vf[s]= Interpoland(abasis,V)

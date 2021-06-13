@@ -12,6 +12,12 @@ using Parameters, QuantEcon, BasisMatrices,LinearAlgebra,Optim,DataFrames,Gadfly
     J::Int64 = 81 # Maximum age
     nn::Float64 = 0.011 # Population growth
     ψ::Vector{Float64} = zeros(0) # survival probabilities
+    ϵ_hansen::Vector{Float64} = zeros(0) # Age efficiency from Hansen paper
+    pop::Vector{Float64} = zeros(0) # Used to calculate survival
+    Nu::Vector{Float64} = zeros(0) # Number of agents in population 
+    μ::Vector{Float64} = zeros(0) # Fraction of agents in population
+    measty::Vector{Float64} = zeros(0) # probability of each type
+    topop::Float64 = 1.0 # Total population
 
     # Preferences 
     β::Float64 = 1.00093 # Discount Factor 
@@ -42,13 +48,14 @@ using Parameters, QuantEcon, BasisMatrices,LinearAlgebra,Optim,DataFrames,Gadfly
     κ2::Float64 = 0.0 # deduction
     τp::Float64 = 0.124 # payroll tax 
     b::Float64 = 0.5 # Social security replacement rate
-    ȳ::Float64 = 87000.0/37748.0
+    τ̄p::Float64 = 87000.0/37748.0 # Max social security rate 
+    ȳ::Float64  = 100000 # Social security threshold
 
     # Grid sizes 
-    ns::Int64 = 7 #X Also number of states?
+    ns::Int64 = 7 # number of states
     na::Int64 = 10 # asset grid
     nl::Int64 = 4  # leisure grid
-    nty::Int64 = 2 
+    nty::Int64 = 2 # number of ability levels
     maxit::Int64 = 10000
 
     # Other
@@ -69,6 +76,8 @@ using Parameters, QuantEcon, BasisMatrices,LinearAlgebra,Optim,DataFrames,Gadfly
     Vf::Array{Interpoland} = Interpoland[] # value function given a
     Vlf::Array{Interpoland} = Interpoland[] # Value function given a,l
     cf::Array{Interpoland} = Interpoland[]
+    lf::Array{Interpoland} = Interpoland[]
+    a′f::Array{Interpoland} = Interpoland[]
     
 
 end;
@@ -269,16 +278,18 @@ function iterateBellman(TM::TaxMod,Vf′)
             end
             #println("Retired $j done")
         else # Working folk
-            for s in 1:ns, ty in 1:nty
-                basis = Vf′[s,ty,j].basis
-                for l in 1:nl # find optimal policy given a and l 
-                    Vl[:,l] = [optimalPolicyWork(TM,Vf′,a,s,ty,j,lgrid[l]).V for a in nodes(basis)[1]]
+            Threads.@threads for s in 1:ns
+                for  ty in 1:nty
+                    basis = Vf′[s,ty,j].basis
+                    for l in 1:nl # find optimal policy given a and l 
+                        Vl[:,l] = [optimalPolicyWork(TM,Vf′,a,s,ty,j,lgrid[l]).V for a in nodes(basis)[1]]
+                    end
+                    # for each a, choose l to maximize V
+                    for ap in 1:len_node
+                        V[ap,s,ty,j] = findmax(Vl[ap,:])[1]
+                    end
+                    Vf[s,ty,j]= Interpoland(basis,V[:,s,ty,J])
                 end
-                # for each a, choose l to maximize V
-                for ap in 1:len_node
-                    V[ap,s,ty,j] = findmax(Vl[ap,:])[1]
-                end
-                Vf[s,ty,j]= Interpoland(basis,V[:,s,ty,J])
             end
             #println("Working $j done")
         end
@@ -295,7 +306,7 @@ function solvebellman!(TM::TaxMod)
     @unpack ns,nty,J = TM
 
     diff = 1.
-    counter = 1
+    counter = 0
     Vf′ = copy(TM.Vf)
     while diff > 1e-8 
         TM.Vf = iterateBellman(TM,Vf′);
@@ -309,11 +320,12 @@ end;
 
 
 """
-    age_eff_pop(J, nty, nn)
+    setup_demographics!(TM::TaxMod)
 
 Generates the age efficieny and population vectors
 """
-function age_eff_pop(J, nty, nn)
+function setup_demographics!(TM::TaxMod)
+    @unpack J, nty, nn = TM
 
     # Age-Efficiency Units from Hansen (1993)
     ephansen = zeros(J)
@@ -481,7 +493,14 @@ function age_eff_pop(J, nty, nn)
     # Total population
     topop=sum(Nu)
 
-    return (ephansen = ephansen, pop = pop, surv = surv, Nu = Nu, mu = mu, ep = ep, measty = measty, topop = topop)
+    TM.ϵ_hansen = ephansen; 
+    TM.pop = pop; 
+    TM.ψ = surv; 
+    TM.Nu = Nu; 
+    TM.μ = mu;
+    TM.ϵ = ep; 
+    TM.measty = measty
+    TM.topop = topop
 end
 
 """
@@ -490,36 +509,31 @@ end
 Sets up grids, shocks, demographics 
 """
 function setup_grid!(TM::TaxMod, a̅ = 75, curve = 2.5)
-    @unpack na,nl,a̲,l̅,J,nty,nn,ns,ρ,var_η,var_α,Vf,cf,k,β = TM
+    @unpack na,nl,a̲,l̅,J,nty,nn,ns,ρ,var_η,var_α,Vf,cf,k,β,ϵ_hansen = TM
 
     # Asset grid: with curvature
     agrid = TM.agrid = (a̅ - a̲).*LinRange(0,1,na).^curve .+ a̲;
     # Labor grid: evenly spaced 
     TM.lgrid = LinRange(0,l̅,nl);
 
-    # Loading survival probs and age efficiency
-    #ephansen,pop,surv,Nu,mu,ep,measty,topop = age_eff_pop(J,nty,nn)
-    TM.ψ = age_eff_pop(J,nty,nn).surv;
-    ephansen = age_eff_pop(J,nty,nn).ephansen;
-
     # Labor Productivity Markov Chain 
     mc = rouwenhorst(ns,ρ,var_η);
     TM.Π = mc.p;
     TM.η = exp.(mc.state_values);
 
-    # Fixed effects 
+    # Ability fixed effects and age efficiency 
     TM.ϵ = zeros(nty,J);
-    TM.ϵ[1,1:J] = exp(-sqrt(var_α)) .* ephansen[1:J];
-    TM.ϵ[2,1:J] = exp(sqrt(var_α)) .* ephansen[1:J];
+    TM.ϵ[1,1:J] = exp(-sqrt(var_α)) .* ϵ_hansen[1:J];
+    TM.ϵ[2,1:J] = exp(sqrt(var_α)) .* ϵ_hansen[1:J];
 
-    # Basis functions and interpolation
+    # Setting up basis functions and interpoland
     abasis = Basis(SplineParams(agrid,0,k));
     anodes = nodes(abasis);
     Vf = Array{Interpoland}(undef,ns,nty,J);
     cons = zeros(length(anodes[1]),ns,nty,J);
     V = zeros(length(anodes[1]),ns,nty,J);
     
-
+    # Creating initial guess for value function
     for s in 1:ns
         for ty in 1:nty
             for j in 1:J
@@ -535,6 +549,7 @@ function setup_grid!(TM::TaxMod, a̅ = 75, curve = 2.5)
 end
 
 tm = TaxMod();
+setup_demographics!(tm);
 setup_grid!(tm);
 solvebellman!(tm)
 
@@ -542,17 +557,121 @@ solvebellman!(tm)
 plot(layer(x->tm.Vf[3,2,60].(x),0,1000,color=["s=1,ty=1,j=1 Vf"]),
     Guide.xlabel("x"),Guide.ylabel("f(x)"),Guide.colorkey(title=""))
 
+####################################################################
+############### Find the stationary distribution  ##################
+####################################################################
 
-# Tami's guess code
-function guesses!(param::TTparam,N,SS)
-    @unpack α,TFP,r̄, δ, ν,N̄,K̄,Ȳ,w̄,SSM = param 
-    TT.N̄ = N
-    TT.K̄ = K̄ = N*( α / (r̄+δ) )^(1.0/(1.0-α))        
-    TT.Ȳ = Ȳ =  TFP*(K̄^α)*(N̄^(1.0-α))					     
-    TT.w̄ =  w̄ = (1.0-α)*Ȳ/N̄
-    TT.SSM = SSM = 2.3047578679665146* Ȳ / sum(ν)
-    TT.SS = SS 
-end
+# Initializing 
+Φ = zeros(undef,ns,nty,J)
+
+# 1 - Have policy function aprime 
+# 
+
+# For the first generation 
+
+Φ[a,s,ty,j]
 
 
+
+####################################################################
+############## Check if markets clear for policies  ################
+####################################################################
+
+function market_residuals(TM::TaxMod)
+    @unpack r,N,κ2,Tr,SS,α,TFP,r,δ,Nu = TM
+
+    # Find capital, output, and wages
+    K = N*((α*TFP)/(r+δ))^(1.0/(1.0-α))
+    Y = TFP*(K^α)*(N^(1.0-α))
+    w = (1.0-α)*Y/N
+
+    # Social security 
+    ȳ = τ̄p * Y / sum(Nu)
+
+    # Solve the household problem given parameters
+    solvebellman!(TM)
+
+    # Find the stationary distribution 
+
+    # Compute the residuals
+    return( 
+        fv1 = As-K*(1.0+nn),
+        fv2 = LabS-N,
+        fv3 = Govcons-tauc*C-Totinctax,
+        fv4 = TrB-TrBn,
+        fv5 = SS-SSn
+    )
+
+    # Goods Market Clearing 
+    Y = TFP * (K^α)*(LabS^(1.0-α))	
+    exdem = (C + As - (1.0-δ)*K + G - Y)
+
+end  
+
+
+
+
+
+
+function iterateBellman_Serial(TM::TaxMod,Vf′)
+    @unpack ns,nty,J,SS,r,τk,Tr,τc,nl,lgrid,jr = TM
+    
+    # Setting up
+    Vf = Array{Interpoland}(undef,ns,nty,J)
+    anodes = nodes(Vf′[1,1,1].basis)
+    len_node = length(anodes[1])
+    V = zeros(len_node,ns,nty,J)
+    #lf = zeros(len_node,ns,nty,J)
+    Vr = zeros(len_node)
+    aprime = zeros(len_node,ns,nty,J)
+    Vl = zeros(len_node,nl)
+    
+    # Finding value function for given aprime and l
+    for j in 1:J
+        if j == J # Last period consume everything
+            aprime[:,:,:,J] .= 0.
+            for a in 1:len_node
+                V[a,:,:,J] .= U(TM,(SS+(1.0+r*(1.0-τk))*(anodes[1][a] + Tr))/(1.0+τc),0.)
+            end
+            for s in 1:ns, ty in 1:nty
+                basis = Vf′[s,ty,j].basis
+                Vf[s,ty,j]= Interpoland(basis,V[:,s,ty,J])
+            end
+            #println("J done")
+        elseif j >= jr # Retired folk
+            basis = Vf′[1,1,j].basis
+            Vr = [optimalPolicyRetired(TM,Vf′,a,j).V for a in nodes(basis)[1]]
+            for s in 1:ns, ty in 1:nty 
+                V[:,s,ty,J] = Vr
+                Vf[s,ty,j]= Interpoland(basis,V[:,s,ty,J])
+            end
+            #println("Retired $j done")
+        else # Working folk
+            for s in 1:ns
+                for  ty in 1:nty
+                    basis = Vf′[s,ty,j].basis
+                    for l in 1:nl # find optimal policy given a and l 
+                        Vl[:,l] = [optimalPolicyWork(TM,Vf′,a,s,ty,j,lgrid[l]).V for a in nodes(basis)[1]]
+                    end
+                    # for each a, choose l to maximize V
+                    for ap in 1:len_node
+                        V[ap,s,ty,j] = findmax(Vl[ap,:])[1]
+                    end
+                    Vf[s,ty,j]= Interpoland(basis,V[:,s,ty,J])
+                end
+            end
+            #println("Working $j done")
+        end
+    end
+    return Vf
+end;
+
+
+tm_p = TaxMod();
+tm_s = TaxMod();
+setup_grid!(tm_p);
+setup_grid!(tm_s);
+
+@time iterateBellman2(tm_p,tm_p.Vf);
+@time iterateBellman(tm_s,tm_s.Vf);
 
