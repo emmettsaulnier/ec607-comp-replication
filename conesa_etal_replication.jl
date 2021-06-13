@@ -40,7 +40,7 @@ using Parameters, QuantEcon, BasisMatrices,LinearAlgebra,Optim,DataFrames,Gadfly
     κ2::Float64 = 0.0 # deduction
     τp::Float64 = 0.124 # payroll tax 
     b::Float64 = 0.5 # Social security replacement rate
-    maxSSrat::Float64 = 87000.0/37748.0
+    ȳ::Float64 = 87000.0/37748.0
 
     # Grid sizes 
     ns::Int64 = 7 #X Also number of states?
@@ -63,7 +63,8 @@ using Parameters, QuantEcon, BasisMatrices,LinearAlgebra,Optim,DataFrames,Gadfly
     #Solution
     agrid::Vector{Float64} = zeros(0)
     k::Int = 2 #type of interpolation
-    Vf::Array{Interpoland} = Interpoland[]
+    Vf::Array{Interpoland} = Interpoland[] # value function given a
+    Vlf::Array{Interpoland} = Interpoland[] # Value function given a,l
     cf::Array{Interpoland} = Interpoland[]
     
 
